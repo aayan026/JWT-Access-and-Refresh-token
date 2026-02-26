@@ -105,7 +105,6 @@ public class AuthController : ControllerBase
         return Ok(new { accessToken = accessToken });
     }
 
-
     ///  bu method refresh tokeni cookiede yazir ve userin melumatlarinda refresh tokeni ve expire date-larini  yenileyir
     private async Task SetRefreshToken(AppUser user, RefreshToken refreshToken)
     {

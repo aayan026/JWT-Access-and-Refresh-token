@@ -8,4 +8,5 @@ namespace EShop.Application.Services.Abstracts;
 public interface IEmailService
 {
     Task SendResetPasswordEmail(string resetPasswordEmailLink, string ToEmail);
+    Task SendConfirmEmail(string token, string toEmail);
 }

@@ -44,4 +44,28 @@ public class EmailService : IEmailService
 
         await smptClient.SendMailAsync(mailMessage);
     }
+    
+    public async Task SendConfirmEmail(string token, string toEmail)
+    {
+        var smtpClient = new SmtpClient();
+        smtpClient.Host = _emailSettings.Host;
+        smtpClient.DeliveryMethod = SmtpDeliveryMethod.Network;
+        smtpClient.UseDefaultCredentials = false;
+        smtpClient.Port = 587;
+        smtpClient.Credentials = new NetworkCredential(_emailSettings.Email, _emailSettings.Password);
+        smtpClient.EnableSsl = true;
+
+        var mailMessage = new MailMessage();
+        mailMessage.From = new MailAddress(_emailSettings.Email);
+        mailMessage.To.Add(toEmail);
+        mailMessage.Subject = "Email Təsdiqləmə";
+        mailMessage.Body = @$"
+        <h4>Hesabınızı təsdiqləmək üçün aşağıdakı token-i kopyalayın:</h4>
+        <p><b>Token:</b> {token}</p>
+        <p>Swagger-də ConfirmEmail endpoint-inə bu token-i daxil edin.</p>";
+        mailMessage.IsBodyHtml = true;
+
+        await smtpClient.SendMailAsync(mailMessage);
+    }
+
 }
