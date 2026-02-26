@@ -1,0 +1,14 @@
+﻿using EShop.Domain.Entities.Concretes;
+using EShop.Application.Repositories.Common;
+
+namespace EShop.Application.Repositories;
+
+public interface IAppUserReadRepository : IReadGenericRepository<AppUser>
+{
+    Task<AppUser> GetUserByEmail(string email);
+    Task<AppUser> GetUserByUsername(string username);
+    Task<AppUser> GetRefreshToken(string refreshToken);
+    Task<AppUser> GetRePasswordToken(string rePasswordToken);
+    // Task<AppUser> GetUserByUsernameAndPassword(string username, string password);
+    // Task<bool> CheckUserByUsernameAndPassword(string username, string password);
+}

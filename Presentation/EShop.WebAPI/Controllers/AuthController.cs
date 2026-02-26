@@ -1,0 +1,200 @@
+﻿using System.Text;
+using EShop.Domain.Helpers;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Mvc;
+using EShop.Application.DTOS.Auth;
+using System.Security.Cryptography;
+using EShop.Application.Repositories;
+using EShop.Domain.Entities.Concretes;
+using Microsoft.AspNetCore.Authorization;
+using EShop.Application.Services.Abstracts;
+
+namespace EShop.WebAPI.Controllers;
+
+[Route("api/[controller]")]
+[ApiController]
+public class AuthController : ControllerBase
+{
+    private readonly IAppUserReadRepository _appUserReadRepository;
+    private readonly IAppUserWriteRepository _appUserWriteRepository;
+    private readonly ITokenService _tokenService;
+    private readonly IEmailService _emailService;
+
+    public AuthController(IAppUserReadRepository appUserReadRepository, IAppUserWriteRepository appUserWriteRepository, ITokenService tokenService, IEmailService emailService)
+    {
+        _appUserReadRepository = appUserReadRepository;
+        _appUserWriteRepository = appUserWriteRepository;
+        _tokenService = tokenService;
+        _emailService = emailService;
+    }
+
+    [HttpPost("[action]")]
+    public async Task<IActionResult> Login([FromBody] LoginDTO loginDTO)
+    {
+        var user = await _appUserReadRepository.GetUserByUsername(loginDTO.Username);
+
+        if (user is null)
+            return BadRequest("Invalid username or password");
+
+
+        using var hmac = new HMACSHA256(user.PasswordSalt);
+        var computedPass = hmac.ComputeHash(Encoding.UTF8.GetBytes(loginDTO.Password));//
+
+        var isCheck = computedPass.SequenceEqual(user.PasswordHash);// databazadaki password hash ile indi gelen hashlanmis passwordu eyni olub olmadiginiyoxlayir
+
+        if (!isCheck)
+        {
+            return BadRequest("Invalid Password");
+        }
+
+        var token = _tokenService.AccessToken(user);//userin melumatlarindan istifade ederek access token yaradir
+        var refreshToken = _tokenService.RefreshToken();//refresh token yaradir
+       
+        await SetRefreshToken(user, refreshToken);
+
+        return Ok(new { token = token });
+    }
+
+    [HttpPost("[action]")]
+    public async Task<IActionResult> AddUser([FromBody] AddAppUserDTO userDTO)
+    {
+        var user = await _appUserReadRepository.GetUserByUsername(userDTO.Username);
+
+        if (user is not null)
+            return BadRequest("This user already exist");
+
+        using var hmac = new HMACSHA256();
+
+        var newUser = new AppUser()
+        {
+            Name = userDTO.Name,
+            Surname = userDTO.Surname,
+            Email = userDTO.Email,
+            Username = userDTO.Username,
+            PasswordHash = hmac.ComputeHash(Encoding.UTF8.GetBytes(userDTO.Password!)),//
+            PasswordSalt = hmac.Key,
+            Role = userDTO.Role
+        };
+
+        await _appUserWriteRepository.AddAsync(newUser);
+        await _appUserWriteRepository.SaveChangeAsync();
+
+        return Ok();
+    }
+
+
+
+    [HttpPost("RefreshToken")]
+    public async Task<IActionResult> RefreshToken()
+    {
+        var refreshToken = Request.Cookies["refreshToken"];
+
+        if (string.IsNullOrEmpty(refreshToken))
+            return BadRequest("Invalid Request token");
+
+        var user = await _appUserReadRepository.GetRefreshToken(refreshToken);
+
+        if (user is null)
+            return BadRequest("Invalid user");
+
+        var accessToken = _tokenService.AccessToken(user);
+        var refreshTokenObj = _tokenService.RefreshToken();
+
+        await SetRefreshToken(user, refreshTokenObj);
+
+        return Ok(new { accessToken = accessToken });
+    }
+
+
+    ///  bu method refresh tokeni cookiede yazir ve userin melumatlarinda refresh tokeni ve expire date-larini  yenileyir
+    private async Task SetRefreshToken(AppUser user, RefreshToken refreshToken)
+    {
+        //cookoeoptions ile cookiede yazilacaq tokenin expire date ve http only olub olmayacagini teyin edirik
+        var cookieOptions = new CookieOptions()
+        {
+            HttpOnly = true,
+            Expires = refreshToken.ExpireDate
+        };
+
+        Response.Cookies.Append("refreshToken", refreshToken.Token, cookieOptions);
+
+        //user ozunde niye refresh token saxlayir?
+        user.RefreshToken = refreshToken.Token;
+        user.RefreshTokenExpireDate = refreshToken.ExpireDate;
+        user.RefreshTokenCreatedDate = refreshToken.CreatedDate;
+
+        _appUserWriteRepository.Update(user);
+        await _appUserWriteRepository.SaveChangeAsync();
+    }
+
+
+    [HttpPost("[action]")]
+    public async Task<IActionResult> ForgetPassword(ForgetPasswordDTO forgetPassword)
+    {
+        var user = await _appUserReadRepository.GetUserByEmail(forgetPassword.Email);
+
+        if (user is null)
+            return BadRequest("Invalid user");
+
+        var rePassword = _tokenService.RePasswordToken();
+
+        user.RePasswordToken = rePassword.Token;
+        user.RePasswordExpireDate = rePassword.ExpireDate;
+        user.RePasswordCreatedDate = rePassword.CreatedDate;
+
+        _appUserWriteRepository.Update(user);
+        await _appUserWriteRepository.SaveChangeAsync();
+
+        await _emailService.SendResetPasswordEmail(rePassword.Token, user.Email);
+
+        return Ok("Sifre sifirlama tokeni emailinize gonderildi.");
+    }
+
+    [HttpPost("[action]")]
+    public async Task<IActionResult> ResetPassword([FromQuery] string token, [FromBody] ResetPasswordDto resetPasswordDto)
+    {
+        var user = await _appUserReadRepository.GetRePasswordToken(token);
+
+        if (user is null)
+            return BadRequest("Invalid user");
+
+        if (user.RePasswordExpireDate < DateTime.Now)
+            return BadRequest("Expire date expired");
+
+        using var hmac = new HMACSHA256();
+
+        user.PasswordHash = hmac.ComputeHash(Encoding.UTF8.GetBytes(resetPasswordDto.NewPassword!));
+        user.PasswordSalt = hmac.Key;
+
+        user.RePasswordToken = null;
+        user.RePasswordExpireDate = null;
+        user.RePasswordCreatedDate = null;
+        
+        _appUserWriteRepository.Update(user);
+        await _appUserWriteRepository.SaveChangeAsync();
+
+        return Ok();
+    }
+
+
+
+    [Authorize(Roles = "Admin")]
+    [HttpGet("[action]")]
+    public IActionResult SomeThing()
+    {
+        var identity = HttpContext.User.Identity as ClaimsIdentity;
+
+        var claims = identity.Claims;
+
+        var user = new AppUser()
+        {
+            Username = claims.FirstOrDefault(x => x.Type == ClaimTypes.Name)?.Value,
+            Email = claims.FirstOrDefault(x => x.Type == ClaimTypes.Email)?.Value,
+            Role = claims.FirstOrDefault(x => x.Type == ClaimTypes.Role)?.Value,
+        };
+
+
+        return Ok(user);
+    }
+
+}
