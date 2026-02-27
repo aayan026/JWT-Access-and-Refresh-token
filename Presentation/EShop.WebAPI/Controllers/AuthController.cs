@@ -36,6 +36,8 @@ public class AuthController : ControllerBase
         if (user is null)
             return BadRequest("Invalid username or password");
 
+        if (!user.EmailConfirmed)
+            return BadRequest("Please confirm your email before login");
 
         using var hmac = new HMACSHA256(user.PasswordSalt);
         var computedPass = hmac.ComputeHash(Encoding.UTF8.GetBytes(loginDTO.Password));//
@@ -49,7 +51,7 @@ public class AuthController : ControllerBase
 
         var token = _tokenService.AccessToken(user);//userin melumatlarindan istifade ederek access token yaradir
         var refreshToken = _tokenService.RefreshToken();//refresh token yaradir
-       
+
         await SetRefreshToken(user, refreshToken);
 
         return Ok(new { token = token });
@@ -58,6 +60,8 @@ public class AuthController : ControllerBase
     [HttpPost("[action]")]
     public async Task<IActionResult> AddUser([FromBody] AddAppUserDTO userDTO)
     {
+        var ConfirmTtoken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
+
         var user = await _appUserReadRepository.GetUserByUsername(userDTO.Username);
 
         if (user is not null)
@@ -73,16 +77,36 @@ public class AuthController : ControllerBase
             Username = userDTO.Username,
             PasswordHash = hmac.ComputeHash(Encoding.UTF8.GetBytes(userDTO.Password!)),//
             PasswordSalt = hmac.Key,
-            Role = userDTO.Role
+            Role = userDTO.Role,
+            EmailConfirmed = false,
+            EmailConfirmToken = ConfirmTtoken,
         };
-
+        await _emailService.SendConfirmEmail(ConfirmTtoken, newUser.Email);
         await _appUserWriteRepository.AddAsync(newUser);
         await _appUserWriteRepository.SaveChangeAsync();
 
         return Ok();
     }
 
+    [HttpPost("[action]")]
+    public async Task<IActionResult> ConfirmEmail([FromQuery] string token, [FromQuery] string email)
+    {
+        var user = await _appUserReadRepository.GetUserByEmail(email);
 
+        if (user is null)
+            return BadRequest("Invalid user");
+
+        if (user.EmailConfirmToken != token)
+            return BadRequest("Invalid token");
+
+        user.EmailConfirmed = true;
+        user.EmailConfirmToken = null;
+
+        _appUserWriteRepository.Update(user);
+        await _appUserWriteRepository.SaveChangeAsync();
+
+        return Ok("Emailiniz tesdiqlendi");
+    }
 
     [HttpPost("RefreshToken")]
     public async Task<IActionResult> RefreshToken()
@@ -137,6 +161,9 @@ public class AuthController : ControllerBase
 
         var rePassword = _tokenService.RePasswordToken();
 
+        //RePassword tokeni userin melumatlarinda saxlayiriq ki,
+        //reset password edende bu tokeni yoxlaya BILEK ve expire date-i de
+        //saxlayiriq ki, reset password edende expire olub olmadigini yoxlaya bilik
         user.RePasswordToken = rePassword.Token;
         user.RePasswordExpireDate = rePassword.ExpireDate;
         user.RePasswordCreatedDate = rePassword.CreatedDate;
@@ -168,7 +195,7 @@ public class AuthController : ControllerBase
         user.RePasswordToken = null;
         user.RePasswordExpireDate = null;
         user.RePasswordCreatedDate = null;
-        
+
         _appUserWriteRepository.Update(user);
         await _appUserWriteRepository.SaveChangeAsync();
 
